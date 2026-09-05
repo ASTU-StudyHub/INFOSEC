@@ -1,0 +1,66 @@
+# ──────────────────────────────────────────────
+# macOS
+# ──────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+.AppleDouble
+.LSOverride
+._*
+
+# Folder icon (its filename contains a trailing carriage return)
+Icon
+
+# Files on network and external volumes
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Metadata created on non-HFS volumes
+.apdisk
+
+# Finder cache and settings
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+
+# ──────────────────────────────────────────────
+# Microsoft Word
+# ──────────────────────────────────────────────
+
+# Temporary / lock files for open documents
+~$*.doc
+~$*.docx
+~$*.docm
+~$*.dot
+~$*.dotx
+~$*.dotm
+
+# AutoRecover file and backups
+*.asd
+*.wbk
+*.bak
+
+# Office owner / lock files (Windows; kept just in case)
+*.~lock.*#
+
+# Office temporary files
+.~lock.*
+~$*
+
+# ──────────────────────────────────────────────
+# Misc (commonly sits next to Word documents)
+# ──────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ──────────────────────────────────────────────
+# Python
+# ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
