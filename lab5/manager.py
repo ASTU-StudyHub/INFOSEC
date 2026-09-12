@@ -208,6 +208,7 @@ class App(tk.Tk):
         self.log_text.delete("1.0", "end")
         self.log_text.insert("end", text)
         self.log_text.see("end")
+        self.log_text.xview_moveto(0)              # последние записи видны с начала строки
         self.log_text.configure(state="disabled")
 
     def selected_login(self):
