@@ -11,11 +11,11 @@
 |---|---|---|---|
 | 1 | Протокол Диффи-Хеллмана | [`lab1/dh.py`](lab1/dh.py) | [`lab1/report.pdf`](lab1/report.pdf) |
 | 2 | Алгоритм шифрования RSA | [`lab2/rsa.py`](lab2/rsa.py) | [`lab2/report.pdf`](lab2/report.pdf) |
-| 3 | Разработка алгоритма хэш-функции | [`lab3/myhash.py`](lab3/myhash.py) | — |
-| 4 | Реализация электронной цифровой подписи | [`lab4/signature.py`](lab4/signature.py) | — |
-| 5 | Комплексное обеспечение безопасности менеджера учётных записей | [`lab5/manager.py`](lab5/manager.py) | — |
+| 3 | Разработка алгоритма хэш-функции | [`lab3/myhash.py`](lab3/myhash.py) | [`lab3/report.pdf`](lab3/report.pdf) |
+| 4 | Реализация электронной цифровой подписи | [`lab4/signature.py`](lab4/signature.py) | [`lab4/report.pdf`](lab4/report.pdf) |
+| 5 | Комплексное обеспечение безопасности менеджера учётных записей | [`lab5/manager.py`](lab5/manager.py) | [`lab5/report.pdf`](lab5/report.pdf) |
 
-В папке каждой работы: программа, `README.md` с описанием и результатами, отчёт в форматах `.docx` и `.pdf` (для работ 3–5 отчёты готовятся).
+В папке каждой работы: программа, `README.md` с описанием и результатами, отчёт в форматах `.docx` и `.pdf`.
 
 ## Запуск
 
