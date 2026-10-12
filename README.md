@@ -3,6 +3,7 @@
 Лабораторные работы по дисциплине «Защита информации»: программы на Python 3 (только стандартная библиотека) и отчёты.
 
 > Астраханский государственный технический университет, кафедра АСОИУ, 2026
+>
 > Выполнил: студент Генералов В. В., группа ЗИНРб-51
 
 ## Лабораторные работы
@@ -23,7 +24,7 @@
 python3 lab1/dh.py
 python3 lab2/rsa.py
 python3 lab3/myhash.py sin      # вариант: sin, cos или xor
-python3 lab4/signature.py       # использует lab2/rsa.py и lab3/myhash.py, запускать из корня
+python3 lab4/signature.py       # использует соседние lab2/rsa.py и lab3/myhash.py
 python3 lab5/manager.py         # графическое окно (tkinter); python3 lab5/storage.py — автотест без GUI
 ```
 
