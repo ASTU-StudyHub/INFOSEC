@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Лабораторная работа №2. Алгоритм шифрования RSA.
 
-Ключи по методичке: p, q — простые; n = p·q; φ = (p−1)(q−1); d выбирается
-случайно и взаимно просто с φ; e находится из условия e·d mod φ = 1.
+Ключи по методическим указаниям: p, q — простые; n = p·q; φ = (p−1)(q−1);
+d выбирается случайно и взаимно просто с φ; e находится из условия e·d mod φ = 1.
 Открытый ключ {e, n}, закрытый {d, n}.
 Шифрование посимвольно: M = код символа, C = M^e mod n, M = C^d mod n.
 Каждый блок должен быть меньше n. Порог n ≥ 256 взят с запасом: любой байт
 0..255 меньше n; для 7-битного ASCII (0..127), который принимает программа,
 хватило бы n ≥ 128.
 
-Режимы: случайные ключи, ручной ввод ключей, шифрование, расшифрование,
-самопроверка (пример методички + прогон всех кодов ASCII), вычисление
-закрытого ключа по открытому (факторизация n — к контрольному вопросу 2).
+Режимы: случайные ключи, ручной ввод ключей (p, q ≤ 10^12), шифрование,
+расшифрование, самопроверка (пример из методических указаний + прогон всех
+кодов ASCII), вычисление закрытого ключа по открытому (факторизация n —
+к контрольному вопросу 2).
 
 Только стандартная библиотека. Запуск: python3 rsa.py
 """
@@ -20,9 +21,10 @@ import random
 import time
 
 P_MIN, P_MAX = 100, 9999     # диапазон случайных простых p, q
-N_MIN = 256                  # n ≥ 256 — любой байт 0..255 меньше n (для ASCII 0..127 хватило бы 128)
+P_LIMIT = 10 ** 12           # предел p, q при ручном вводе: простота — пробным делением
+N_MIN = 256                  # n ≥ 256: любой байт 0..255 меньше n (для ASCII хватило бы 128)
 
-# Пример методички: p = 3, q = 11, n = 33, d = 3, e = 7; "CAB" при A=1, B=2, C=3
+# Пример методических указаний: p = 3, q = 11, n = 33, d = 3, e = 7; "CAB" при A=1, B=2, C=3
 EXAMPLE = {"p": 3, "q": 11, "d": 3, "e": 7, "M": [3, 1, 2], "C": [9, 1, 29]}
 
 
@@ -43,7 +45,7 @@ def modpow(base, exp, mod):
 
 
 def is_prime(n):
-    """Пробное деление до sqrt(n): для n < 10^6 мгновенно."""
+    """Пробное деление до sqrt(n): при n ≤ 10^12 — не больше 5·10^5 делений, доли секунды."""
     if n < 2:
         return False
     if n % 2 == 0:
@@ -89,6 +91,12 @@ def modinv(a, m):
 
 
 # --- Ключи ------------------------------------------------------------------------
+def small_n_error(n):
+    """Сообщение для n = p·q < N_MIN (общее для key_errors и ручного ввода)."""
+    return (f"n = p·q = {n} < {N_MIN}: требуется n ≥ {N_MIN} "
+            "(с запасом: любой байт 0..255 меньше n)")
+
+
 def key_errors(p, q, d=None):
     """Список нарушений условий на p, q, d (пустой список — всё в порядке)."""
     errors = []
@@ -99,7 +107,7 @@ def key_errors(p, q, d=None):
     if p == q:
         errors.append("p и q должны быть различны: при p = q формула φ = (p−1)(q−1) неверна")
     if p * q < N_MIN:
-        errors.append(f"n = p·q = {p * q} < {N_MIN}: не любой код символа поместится в блок M < n")
+        errors.append(small_n_error(p * q))
     if d is not None and not errors:
         phi = (p - 1) * (q - 1)
         if not 1 < d < phi:
@@ -110,9 +118,10 @@ def key_errors(p, q, d=None):
 
 
 def make_keys(p, q, d=None, check=True):
-    """Генерация пары ключей по методичке. Возвращает ((e, n), (d, n), φ).
+    """Генерация пары ключей по методическим указаниям. Возвращает ((e, n), (d, n), φ).
     Если d не задано — выбирается случайно из (1, φ) до выполнения НОД(d, φ) = 1.
-    check=False отключает проверку условий (нужно для примера методички с n = 33 < 256).
+    check=False отключает проверку условий (нужно для примера из методических
+    указаний с n = 33 < 256).
     Корректность M = C^d mod n для всех 0 ≤ M < n следует из e·d ≡ 1 (mod φ) и
     теоремы Эйлера (при НОД(M, n) = 1), а для M, кратных p или q, — из китайской
     теоремы об остатках; поэтому p ≠ q обязательно: при p = q значение φ иное."""
@@ -153,14 +162,15 @@ def decrypt_text(numbers, d, n):
     for c in numbers:
         m = decrypt_int(c, d, n)
         if m > 0x10FFFF:
-            raise ValueError(f"блок M = {m} не является кодом символа: неверный ключ или чужой шифртекст")
+            raise ValueError(f"блок M = {m} не является кодом символа: "
+                             "неверный ключ или чужой шифртекст")
         chars.append(chr(m))
     return "".join(chars)
 
 
 # --- Самопроверка и атака -------------------------------------------------------------
 def self_test(verbose=True):
-    """1) пример методички (p=3, q=11, d=3 → e=7; 3,1,2 → 9,1,29 → 3,1,2);
+    """1) пример из методических указаний (p=3, q=11, d=3 → e=7; 3,1,2 → 9,1,29 → 3,1,2);
     2) прогон всех кодов 0..255 через ключ с n ≥ 256 (p=5, q=53, n=265)."""
     ex = EXAMPLE
     (e, n), (d, _), phi = make_keys(ex["p"], ex["q"], ex["d"], check=False)
@@ -168,13 +178,16 @@ def self_test(verbose=True):
     back = [decrypt_int(x, d, n) for x in c]
     ok1 = e == ex["e"] and c == ex["C"] and back == ex["M"]
     if verbose:
-        print(f"  Пример методички: p={ex['p']}, q={ex['q']}, n={n}, φ={phi}, d={d} → e={e} (ожидалось {ex['e']})")
-        print(f"    M = {ex['M']} → C = {c} (ожидалось {ex['C']}) → M' = {back}: {'PASS' if ok1 else 'FAIL'}")
+        print(f"  Пример методических указаний: p={ex['p']}, q={ex['q']}, n={n}, φ={phi}, "
+              f"d={d} → e={e} (ожидалось {ex['e']})")
+        print(f"    M = {ex['M']} → C = {c} (ожидалось {ex['C']}) → M' = {back}: "
+              f"{'PASS' if ok1 else 'FAIL'}")
     (e, n), (d, _), _ = make_keys(5, 53, 7)
     matched = sum(decrypt_int(encrypt_int(m, e, n), d, n) == m for m in range(256))
     ok2 = matched == 256
     if verbose:
-        print(f"  Все коды 0..255 через ключ n={n} (p=5, q=53, d={d}, e={e}): совпало {matched}/256: {'PASS' if ok2 else 'FAIL'}")
+        print(f"  Все коды 0..255 через ключ n={n} (p=5, q=53, d={d}, e={e}): "
+              f"совпало {matched}/256: {'PASS' if ok2 else 'FAIL'}")
         print(f"  Итог самопроверки: {'OK' if ok1 and ok2 else 'ОШИБКА'}")
     return ok1 and ok2
 
@@ -221,7 +234,9 @@ def read_int(prompt, check=None, allow_empty=False):
 
 
 def read_text(prompt):
-    """Строка из символов ASCII (коды 0..127); иначе — сообщение и повтор."""
+    """Строка из символов ASCII (коды 0..127); иначе — сообщение и повтор.
+    Текст вводится одной строкой, поэтому перевод строки (код 10) в него не входит;
+    шифрование всех кодов 0..127 проверяет самопроверка (пункт 5)."""
     while True:
         text = input(prompt)
         bad = [ch for ch in text if ord(ch) > 127]
@@ -241,12 +256,14 @@ def show_keys(st, p=None, q=None):
     (e, n), (d, _) = st.public, st.private
     if p is not None:
         print(f"  p = {p}, q = {q}, n = p·q = {n}, φ = (p−1)(q−1) = {st.phi}")
-    print(f"  d = {d} (НОД(d, φ) = {gcd(d, st.phi)}), e = d⁻¹ mod φ = {e}, проверка: e·d mod φ = {e * d % st.phi}")
+    print(f"  d = {d} (НОД(d, φ) = {gcd(d, st.phi)}), e = d⁻¹ mod φ = {e}, "
+          f"проверка: e·d mod φ = {e * d % st.phi}")
     print(f"  Открытый ключ {{e, n}} = {{{e}, {n}}}, закрытый ключ {{d, n}} = {{{d}, {n}}}")
 
 
 def random_keys(st):
-    print(f"Случайные ключи: p, q — простые из [{P_MIN}, {P_MAX}], d — случайное, взаимно простое с φ.")
+    print(f"Случайные ключи: p, q — простые из [{P_MIN}, {P_MAX}], "
+          "d — случайное, взаимно простое с φ.")
     p = gen_prime()
     q = gen_prime()
     while q == p:
@@ -255,20 +272,31 @@ def random_keys(st):
     show_keys(st, p, q)
 
 
+def prime_error(name, v):
+    """Проверка p или q при ручном вводе. Предел P_LIMIT — до проверки простоты:
+    пробное деление большого числа длилось бы минуты и часы без сообщения."""
+    if v > P_LIMIT:
+        return f"{name} должно быть не больше 10^12: простота проверяется пробным делением"
+    if not is_prime(v):
+        return f"{name} = {v} не простое"
+    return None
+
+
 def manual_keys(st):
     print("Ручной ввод ключей.")
-    p = read_int("  p (простое): ", lambda v: None if is_prime(v) else f"p = {v} не простое")
+    p = read_int("  p (простое, p ≤ 10^12): ", lambda v: prime_error("p", v))
 
     def check_q(v):
-        if not is_prime(v):
-            return f"q = {v} не простое"
+        error = prime_error("q", v)
+        if error:
+            return error
         if v == p:
             return "q должно отличаться от p: при p = q формула φ = (p−1)(q−1) неверна"
         if p * v < N_MIN:
-            return f"n = p·q = {p * v} < {N_MIN}: не любой код символа поместится в блок M < n"
+            return small_n_error(p * v)
         return None
 
-    q = read_int("  q (простое, q ≠ p, p·q ≥ 256): ", check_q)
+    q = read_int("  q (простое, q ≠ p, p·q ≥ 256, q ≤ 10^12): ", check_q)
     phi = (p - 1) * (q - 1)
     print(f"  n = {p * q}, φ = {phi}")
 
@@ -297,26 +325,28 @@ def encrypt_mode(st):
 
 
 def decrypt_mode(st):
+    """Enter вместо d — текущий закрытый ключ {d, n} целиком (n не запрашивается);
+    иначе d и n вводятся оба. Enter вместо шифртекста — последний результат пункта 3;
+    диапазон [0, n−1] проверяется и для него (он мог быть получен другим ключом)."""
     has_key = st.private is not None
     d = read_int("  d (Enter — текущий закрытый ключ): " if has_key else "  d: ",
                  lambda v: None if v > 0 else "d должно быть положительным", allow_empty=has_key)
-    n = read_int("  n (Enter — текущий): " if has_key else "  n: ",
-                 lambda v: None if v > 1 else "n должно быть больше 1", allow_empty=has_key)
     if d is None:
         d, n = st.private
-    elif n is None:
-        n = st.private[1]
-    prompt = "  Шифртекст, числа через пробел" + (" (Enter — последний результат): " if st.last_cipher else ": ")
+    else:
+        n = read_int("  n: ", lambda v: None if v > 1 else "n должно быть больше 1")
+    prompt = "  Шифртекст, числа через пробел"
+    prompt += " (Enter — последний результат): " if st.last_cipher else ": "
     while True:
         raw = input(prompt).strip()
         if raw == "" and st.last_cipher:
             numbers = st.last_cipher
-            break
-        try:
-            numbers = [int(x) for x in raw.split()]
-        except ValueError:
-            print("  Нужны целые числа через пробел.")
-            continue
+        else:
+            try:
+                numbers = [int(x) for x in raw.split()]
+            except ValueError:
+                print("  Нужны целые числа через пробел.")
+                continue
         if any(not 0 <= c < n for c in numbers):
             print(f"  Каждое число должно лежать в [0, n−1] = [0, {n - 1}].")
             continue
@@ -336,8 +366,14 @@ def attack_mode(st):
         return
     e, n = st.public
     print(f"  Противник знает только открытый ключ {{e, n}} = {{{e}, {n}}}.")
-    p, q, d, ms = recover_private_key(e, n)
-    print(f"  Факторизация: n = {p} · {q}, φ = {(p - 1) * (q - 1)}, d = e⁻¹ mod φ = {d}  ({ms:.3f} мс)")
+    print("  Разложение n пробным делением может занять много времени (Ctrl+C — прервать).")
+    try:
+        p, q, d, ms = recover_private_key(e, n)
+    except KeyboardInterrupt:
+        print("\n  Разложение прервано, ключи сохранены.")
+        return
+    print(f"  Факторизация: n = {p} · {q}, φ = {(p - 1) * (q - 1)}, "
+          f"d = e⁻¹ mod φ = {d}  ({ms:.3f} мс)")
     print(f"  Совпадает с настоящим закрытым ключом: {'да' if d == st.private[0] else 'нет'}")
 
 
@@ -348,7 +384,7 @@ def main():
             "  2 — ввод ключей вручную (p, q, d)\n"
             "  3 — зашифровать текст открытым ключом {e, n}\n"
             "  4 — расшифровать закрытым ключом {d, n}\n"
-            "  5 — самопроверка (пример методички, все коды ASCII)\n"
+            "  5 — самопроверка (пример из методических указаний, все коды ASCII)\n"
             "  6 — вычислить закрытый ключ по открытому (факторизация n)\n"
             "  0 — выход")
     actions = {"1": random_keys, "2": manual_keys, "3": encrypt_mode, "4": decrypt_mode,
