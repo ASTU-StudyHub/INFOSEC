@@ -16,7 +16,8 @@
 Шифрование не конфликтует с контролем целостности: хэш-сумма считается по открытому
 содержимому БД, а шифрование обратимо байт в байт, поэтому после расшифрования проверка
 сходится. Все операции регистрируются в журнале, поэтому пока журнал зашифрован,
-доступно только его расшифрование.
+доступно только его расшифрование; если строку журнала записать не удалось, изменённые
+файлы возвращаются к прежнему содержимому («нет журнала — нет операции»).
 
 Файлы (папка data рядом с программой): accounts.txt — БД, accounts.hash — эталонная
 хэш-сумма, events.log — журнал. Только стандартная библиотека.
@@ -44,7 +45,8 @@ ROLES = ("db", "hash", "log")
 PASSWORD_ITERATIONS = 100_000     # PBKDF2 для паролей учётных записей
 KDF_ITERATIONS = 200_000          # PBKDF2 для ключей шифрования файлов
 MAGIC = "#ENCRYPTED AES-256-CBC, HMAC-SHA256, ключ: PBKDF2-HMAC-SHA256 из пароля файла"
-DB_HEADER = "# логин:соль(hex):PBKDF2-HMAC-SHA256(пароль, соль, %d итераций)(hex)" % PASSWORD_ITERATIONS
+DB_HEADER = ("# логин:соль(hex):PBKDF2-HMAC-SHA256(пароль, соль, %d итераций)(hex)"
+             % PASSWORD_ITERATIONS)
 LOGIN_MAX, PASSWORD_MAX = 32, 128
 
 
@@ -57,7 +59,7 @@ def first_upper(text):
     return text[:1].upper() + text[1:]
 
 
-# --- Пароли учётных записей ----------------------------------------------------------------
+# --- Пароли учётных записей -------------------------------------------------------------------
 def hash_password(password, salt=None):
     """Солёный хэш пароля. Возвращает (соль hex, хэш hex)."""
     salt = os.urandom(16) if salt is None else salt
@@ -77,7 +79,8 @@ def check_login(login):
     if any(ch.isspace() or ch == ":" or ord(ch) < 32 for ch in login):
         raise ManagerError("логин не может содержать пробелы, двоеточие и управляющие символы")
     if login.startswith("#"):
-        raise ManagerError("логин не может начинаться с символа «#» (так помечены строки-комментарии БД)")
+        raise ManagerError("логин не может начинаться с символа «#» "
+                           "(так помечены строки-комментарии БД)")
 
 
 def is_hex(text, length):
@@ -94,8 +97,8 @@ def check_new_password(password):
 def derive_keys(password, salt, role):
     """Из пароля файла — ключ шифрования (32 байта) и ключ HMAC (32 байта).
     Имя файла входит в соль, поэтому у файлов разные ключи даже при одинаковом пароле."""
-    material = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt + FILES[role].encode("utf-8"),
-                                   KDF_ITERATIONS, dklen=64)
+    material = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                   salt + FILES[role].encode("utf-8"), KDF_ITERATIONS, dklen=64)
     return material[:32], material[32:]
 
 
@@ -132,23 +135,31 @@ def decrypt_data(text, password, role):
         raise ManagerError(f"файл повреждён: {exc}")
 
 
-# --- Хранилище: файлы, учётные записи, целостность, журнал --------------------------------------
+# --- Хранилище: файлы, учётные записи, целостность, журнал ------------------------------------
 class Store:
     def __init__(self, data_dir=DATA_DIR):
         self.dir = data_dir
         try:
             os.makedirs(self.dir, exist_ok=True)
         except OSError as exc:
-            raise ManagerError(f"не удалось создать папку данных {self.dir}: {exc.strerror or exc}")
+            raise ManagerError(f"не удалось создать папку данных {self.dir}: "
+                               f"{exc.strerror or exc}")
+        # первый запуск; если эталон есть, а БД нет, — это удаление извне, БД не создаётся
         if self.read("db") is None and self.read("hash") is None and not self.is_encrypted("log"):
-            self.create_db()                 # первый запуск; если эталон есть, а БД нет — это удаление извне
+            self.create_db()
 
     def create_db(self):
         """Пустая БД и её эталонная хэш-сумма (первый запуск или явное решение пользователя)."""
         self.require_plain("hash", "log")
-        self.write("db", (DB_HEADER + "\n").encode("utf-8"))
-        self.write("hash", self.hash_line())
-        self.log("создана пустая БД учётных записей, сохранена её хэш-сумма")
+        old_db, old_hash = self.read("db"), self.read("hash")
+        try:
+            self.write("db", (DB_HEADER + "\n").encode("utf-8"))
+            self.write("hash", self.hash_line())
+            self.log("создана пустая БД учётных записей, сохранена её хэш-сумма")
+        except ManagerError:
+            self.restore("db", old_db)
+            self.restore("hash", old_hash)
+            raise
 
     def path(self, role):
         return os.path.join(self.dir, FILES[role])
@@ -177,6 +188,17 @@ class Store:
                 pass
             raise ManagerError(f"не удалось записать файл {FILES[role]}: {exc.strerror or exc}")
 
+    def restore(self, role, data):
+        """Откат файла к прежнему содержимому (None — файла не было).
+        Ошибка отката не заменяет ошибку, из-за которой он выполняется."""
+        try:
+            if data is None:
+                os.remove(self.path(role))
+            else:
+                self.write(role, data)
+        except (OSError, ManagerError):
+            pass
+
     def is_encrypted(self, role):
         data = self.read(role)
         return data is not None and data.startswith(MAGIC.encode("utf-8") + b"\n")
@@ -185,7 +207,8 @@ class Store:
         """Операция возможна, только если перечисленные файлы не зашифрованы."""
         for role in roles:
             if self.is_encrypted(role):
-                raise ManagerError(f"файл {FILES[role]} ({TITLES[role]}) зашифрован — сначала расшифруйте его")
+                raise ManagerError(f"файл {FILES[role]} ({TITLES[role]}) зашифрован — "
+                                   "сначала расшифруйте его")
 
     # --- журнал событий
     def log(self, event):
@@ -215,7 +238,8 @@ class Store:
             if not line.strip() or line.startswith("#"):
                 continue
             parts = line.split(":")
-            if len(parts) != 3 or not parts[0] or not is_hex(parts[1], 32) or not is_hex(parts[2], 64):
+            if len(parts) != 3 or not parts[0] or not (is_hex(parts[1], 32)
+                                                       and is_hex(parts[2], 64)):
                 raise ManagerError(f"файл БД повреждён (строка {number})")
             accounts.append(tuple(parts))
         return accounts
@@ -229,14 +253,9 @@ class Store:
         try:
             self.write("hash", self.hash_line())
             self.log(f"{event}; хэш-сумма БД обновлена: {self.db_hash()[:16]}…")
-        except ManagerError:
-            try:                                   # откат: БД и эталон меняются только вместе
-                if old_db is not None:
-                    self.write("db", old_db)
-                if old_hash is not None:
-                    self.write("hash", old_hash)
-            except ManagerError:
-                pass
+        except ManagerError:                       # откат: БД и эталон меняются только вместе
+            self.restore("db", old_db)
+            self.restore("hash", old_hash)
             raise
 
     def add_account(self, login, password):
@@ -311,8 +330,13 @@ class Store:
 
     def save_hash(self):
         self.require_plain("db", "hash", "log")
+        old_hash = self.read("hash")
         self.write("hash", self.hash_line())
-        self.log(f"сохранена эталонная хэш-сумма БД: {self.db_hash()[:16]}…")
+        try:
+            self.log(f"сохранена эталонная хэш-сумма БД: {self.db_hash()[:16]}…")
+        except ManagerError:
+            self.restore("hash", old_hash)
+            raise
 
     def check_integrity(self):
         """Возвращает (совпало, эталон, актуальная). ManagerError, если эталона нет."""
@@ -321,25 +345,36 @@ class Store:
         if expected is None:
             raise ManagerError("эталонная хэш-сумма не сохранена")
         ok = hmac.compare_digest(expected, actual)
-        self.log("проверка целостности БД: " + ("БД в целостности" if ok
-                 else f"БД БЫЛА ИЗМЕНЕНА ИЗВНЕ (эталон {expected[:16]}…, актуальная {actual[:16]}…)"))
+        self.log("проверка целостности БД: " + ("БД в целостности" if ok else
+                 f"БД БЫЛА ИЗМЕНЕНА ИЗВНЕ (эталон {expected[:16]}…, "
+                 f"актуальная {actual[:16]}…)"))
         return ok, expected, actual
 
     # --- шифрование файлов
-    def encrypt_file(self, role, password):
-        if not password:
-            raise ManagerError("пароль файла не может быть пустым")
+    def check_encrypt(self, role):
+        """Условия шифрования файла (окно проверяет их ещё до запроса пароля)."""
         if self.is_encrypted(role):
             raise ManagerError(f"файл {FILES[role]} уже зашифрован")
         if role != "log":
             self.require_plain("log")
-        data = self.read(role)
-        if data is None:
+        if self.read(role) is None:
             raise ManagerError(f"файл {FILES[role]} не найден")
+
+    def check_decrypt(self, role):
+        """Условия расшифрования файла (окно проверяет их ещё до запроса пароля)."""
+        if not self.is_encrypted(role):
+            raise ManagerError(f"файл {FILES[role]} не зашифрован")
+        if role != "log":
+            self.require_plain("log")
+
+    def encrypt_file(self, role, password):
+        if not password:
+            raise ManagerError("пароль файла не может быть пустым")
+        self.check_encrypt(role)
         event = f"зашифрован файл: {TITLES[role]} ({FILES[role]})"
         if role == "log":
             self.log(event)                  # последняя запись перед шифрованием самого журнала
-            data = self.read(role)
+        data = self.read(role)
         try:
             self.write(role, encrypt_data(data, password, role).encode("utf-8"))
         except ManagerError as exc:
@@ -347,25 +382,30 @@ class Store:
                 self.log(f"ОТКАЗ в шифровании файла {FILES[role]}: {exc}")
             raise
         if role != "log":
-            self.log(event)
+            try:
+                self.log(event)
+            except ManagerError:             # нет записи в журнале — файл остаётся открытым
+                self.restore(role, data)
+                raise
 
     def decrypt_file(self, role, password):
-        if not self.is_encrypted(role):
-            raise ManagerError(f"файл {FILES[role]} не зашифрован")
-        if role != "log":
-            self.require_plain("log")
-        text = self.read(role).decode("utf-8", "replace")
+        self.check_decrypt(role)
+        old = self.read(role)
         try:
-            plain = decrypt_data(text, password, role)
+            plain = decrypt_data(old.decode("utf-8", "replace"), password, role)
         except ManagerError as exc:
             if role != "log":
                 self.log(f"ОТКАЗ в расшифровании файла {FILES[role]}: {exc}")
             raise
         self.write(role, plain)
-        self.log(f"расшифрован файл: {TITLES[role]} ({FILES[role]})")
+        try:
+            self.log(f"расшифрован файл: {TITLES[role]} ({FILES[role]})")
+        except ManagerError:                 # нет записи в журнале — файл остаётся зашифрованным
+            self.restore(role, old)
+            raise
 
 
-# --- Автоматическая проверка без GUI ---------------------------------------------------------------
+# --- Автоматическая проверка без GUI ----------------------------------------------------------
 def self_test(verbose=True):
     """Сценарий из задания: учётные записи → целостность → внешнее изменение → шифрование."""
     results = []
@@ -386,7 +426,8 @@ def self_test(verbose=True):
         step("верный пароль принимается", st.verify_password("ivan", "qwerty123"))
         step("неверный пароль отклоняется", not st.verify_password("ivan", "qwerty124"))
         st.update_account("ivan", "ivan", "newpass")
-        step("смена пароля", st.verify_password("ivan", "newpass") and not st.verify_password("ivan", "qwerty123"))
+        step("смена пароля", st.verify_password("ivan", "newpass")
+             and not st.verify_password("ivan", "qwerty123"))
         st.update_account("maria", "maria.p", "")
         step("переименование без смены пароля", st.verify_password("maria.p", "Пароль!2026"))
         try:
@@ -399,14 +440,14 @@ def self_test(verbose=True):
 
         ok, _, _ = st.check_integrity()
         step("целостность после изменений через программу", ok)
-        with open(st.path("db"), "ab") as f:                       # изменение «извне», минуя программу
+        with open(st.path("db"), "ab") as f:             # изменение «извне», минуя программу
             f.write(("hacker:" + "00" * 16 + ":" + "00" * 32 + "\n").encode("ascii"))
         ok, _, _ = st.check_integrity()
         step("внешнее изменение обнаружено", not ok)
         st.delete_account("hacker")
         step("после изменения через программу эталон обновлён", st.check_integrity()[0])
         good_hash = st.read("hash")
-        st.write("hash", "мусор вместо хэша\n".encode("utf-8"))          # порча файла эталона «извне»
+        st.write("hash", "мусор вместо хэша\n".encode("utf-8"))   # порча файла эталона «извне»
         try:
             st.check_integrity()
             step("испорченный файл хэш-суммы → сообщение об ошибке", False)
@@ -414,7 +455,7 @@ def self_test(verbose=True):
             step("испорченный файл хэш-суммы → сообщение об ошибке", True)
         st.write("hash", good_hash)
         good_db = st.read("db")
-        st.write("db", good_db + b"eve:not-hex-salt:not-hex-hash\n")       # порча строки БД «извне»
+        st.write("db", good_db + b"eve:not-hex-salt:not-hex-hash\n")   # порча строки БД «извне»
         try:
             st.load_accounts()
             step("испорченная строка БД → сообщение об ошибке", False)
@@ -428,7 +469,8 @@ def self_test(verbose=True):
             step("логин с «#» отклонён", True)
 
         passwords = {"db": "key-db", "hash": "key-hash", "log": "key-log"}
-        secrets = {"db": "ivan:", "hash": st.stored_hash(), "log": "проверка целостности"}   # что не должно читаться
+        # что не должно читаться в зашифрованных файлах
+        secrets = {"db": "ivan:", "hash": st.stored_hash(), "log": "проверка целостности"}
         for role in ROLES:
             st.encrypt_file(role, passwords[role])
         step("все три файла зашифрованы", all(st.is_encrypted(r) for r in ROLES))
@@ -454,14 +496,40 @@ def self_test(verbose=True):
         st.decrypt_file("db", passwords["db"])
         st.decrypt_file("hash", passwords["hash"])
         step("после расшифрования БД в целостности", st.check_integrity()[0])
-        step("учётные записи сохранились", [a[0] for a in st.load_accounts()] == ["ivan", "maria.p"])
+        step("учётные записи сохранились",
+             [a[0] for a in st.load_accounts()] == ["ivan", "maria.p"])
+
+        def broken_log(event):                     # сбой записи журнала
+            raise ManagerError("журнал недоступен")
+
+        def undone(action):
+            """Операция при сбое журнала не должна изменить ни одного файла."""
+            before = {role: st.read(role) for role in ROLES}
+            st.log = broken_log
+            try:
+                action()
+            except ManagerError:
+                pass
+            finally:
+                del st.log
+            return all(st.read(role) == before[role] for role in ROLES)
+
+        st.write("db", st.read("db") + b"\n")     # эталон устарел: save_hash обязан его переписать
+        rolled_back = [undone(lambda: st.add_account("petr", "1")), undone(st.save_hash),
+                       undone(lambda: st.encrypt_file("db", "k"))]
+        st.encrypt_file("hash", "k")
+        rolled_back.append(undone(lambda: st.decrypt_file("hash", "k")))
+        st.decrypt_file("hash", "k")
+        step("сбой записи журнала → операция отменена", all(rolled_back))
 
         wanted = ["добавлена", "изменена", "удалена", "зашифрован файл", "расшифрован файл",
                   "сохранена эталонная", "проверка целостности", "ОТКАЗ"]
         st.save_hash()
         lines = st.log_lines()
-        step("в журнале есть все виды событий", all(any(w in line for line in lines) for w in wanted))
-        step("записи журнала с датой и временем", all(len(line) > 20 and line[4] == "-" and line[10] == " " for line in lines))
+        step("в журнале есть все виды событий",
+             all(any(w in line for line in lines) for w in wanted))
+        step("записи журнала с датой и временем",
+             all(len(line) > 20 and line[4] == "-" and line[10] == " " for line in lines))
         if verbose:
             print("\nЖурнал событий:")
             for line in lines:
@@ -476,5 +544,5 @@ def self_test(verbose=True):
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="replace")     # консоль Windows в cp866/cp1251 не знает «→» и «…»
+        sys.stdout.reconfigure(errors="replace")    # консоль Windows (cp866) не знает «→» и «…»
     sys.exit(0 if self_test() else 1)
