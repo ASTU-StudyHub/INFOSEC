@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Лабораторная работа №3. Разработка алгоритма хэш-функции.
 
-Варианты по таблице 3.1 методички: 1 — sin(m), 2 — cos(m), 3 — xor(m).
-Вариант задаётся аргументом запуска (python3 myhash.py sin|cos|xor) или в меню.
+Варианты по таблице 3.1 методических указаний: 1 — sin(m), 2 — cos(m), 3 — xor(m).
+Вариант задаётся аргументом запуска (python3 myhash.py sin|cos|xor); без аргумента
+программа спрашивает его при запуске.
 
 Схема — итеративная (как у MD5/SHA), внутреннее состояние 64 бита = две 32-битные
 половины (L, R), выход 32 бита (8 шестнадцатеричных цифр):
@@ -26,8 +27,8 @@
 - Односторонность даёт не sin/cos/xor (они обратимы), а свёртка 64-битного состояния в
   32-битный выход: по хэшу состояние не восстановить, каждому выходу отвечает ~2^32
   состояний. Прообраз ищется только перебором ~2^32 сообщений, второй прообраз — так же,
-  коллизия — за ~2^16 попыток по парадоксу дней рождения (пункт 3б задания выполним;
-  при 64-битном выходе перебор коллизию не нашёл бы).
+  коллизия — за ~2^16 попыток по парадоксу дней рождения (поиск пары с одинаковым хэшем
+  из пункта 3 задания выполним; при 64-битном выходе перебор коллизию не нашёл бы).
 - sin(t) квантуется до целого round(sin(t)·2^30): библиотеки libm (Apple, glibc) дают
   для больших аргументов значения, различающиеся в последнем бите double, и без
   квантования хэш одного сообщения на разных системах отличался бы. Умножение на P
@@ -50,8 +51,8 @@ MASK = 0xFFFFFFFF
 IV_L = 0x811C9DC5            # смещение FNV-1a — ненулевое начальное состояние
 IV_R = 0x9E3779B9            # 2^32 / золотое сечение — вторая половина состояния
 P = 16777619                 # простое FNV-1a: нечётное, умножение обратимо по модулю 2^32
-MUL = 31                     # нечётный множитель (как в hashCode Java): t = 31·R + c обратимо по R
-SIN_SCALE = 2 ** 30          # квантование sin/cos до целого — независимость от последнего бита libm
+MUL = 31                     # нечётный (как в hashCode Java): t = 31·R + c обратимо по R
+SIN_SCALE = 2 ** 30          # квантование sin/cos до целого: последний бит libm почти не влияет
 FMIX_1, FMIX_2 = 0x85EBCA6B, 0xC2B2AE35   # финализатор fmix32 из MurmurHash3 (сдвиги 16, 13, 16)
 SEPARATOR = "\x1f"           # разделитель соли и сообщения (unit separator)
 ALPHABET = string.ascii_lowercase + string.digits   # алфавит тестов по заданию: a-z, 0-9
@@ -106,7 +107,8 @@ def to_hex(h):
 
 def naive_hash(message, variant="sin"):
     """«Наивная» схема по варианту — для сравнения в анализе:
-    sin/cos: floor(|f(сумма кодов)|·2^32) — коммутативна, неравномерна (арксинусное распределение);
+    sin/cos: floor(|f(сумма кодов)|·2^32) — коммутативна, неравномерна
+             (арксинусное распределение);
     xor: xor кодов символов — 7 бит, коммутативен, самообратен."""
     codes = [ord(ch) for ch in message]
     if variant == "xor":
@@ -161,7 +163,8 @@ def avalanche_stats(hash_fn, pairs=1000, seed=2026):
 
 def find_collision(variant, seed=2026):
     """Поиск коллизии методом дней рождения: различные случайные сообщения до первого
-    повтора хэша. Возвращает (сообщение 1, сообщение 2, хэш, число различных сообщений, секунды)."""
+    повтора хэша. Возвращает (сообщение 1, сообщение 2, хэш, число различных
+    сообщений, секунды)."""
     rng = random.Random(seed)
     seen_hash, seen_msg = {}, set()
     t0 = time.perf_counter()
@@ -197,8 +200,11 @@ STRUCTURAL_PAIRS = [
 
 def structural_checks(hash_fn):
     """Пары входов, на которых ломаются наивные схемы. hash_fn(message, salt) → int."""
-    return [(m1, s1, m2, s2, hash_fn(m1, s1), hash_fn(m2, s2), hash_fn(m1, s1) == hash_fn(m2, s2))
-            for (m1, s1), (m2, s2) in STRUCTURAL_PAIRS]
+    rows = []
+    for (m1, s1), (m2, s2) in STRUCTURAL_PAIRS:
+        h1, h2 = hash_fn(m1, s1), hash_fn(m2, s2)
+        rows.append((m1, s1, m2, s2, h1, h2, h1 == h2))
+    return rows
 
 
 # --- Меню ----------------------------------------------------------------------------------
@@ -233,11 +239,13 @@ def mode_avalanche(variant):
     changed, h1, h2, dist = avalanche_pair(message, position, new_char, fn)
     print(f"  {message!r:16} → {to_hex(h1)}  {h1:032b}")
     print(f"  {changed!r:16} → {to_hex(h2)}  {h2:032b}")
-    print(f"  различаются биты:            {''.join('^' if (h1 ^ h2) >> (31 - i) & 1 else ' ' for i in range(32))}")
-    print(f"  расстояние Хэмминга: {dist} из 32 ({dist / 32:.0%}); ожидание для идеальной функции — 16")
+    marks = "".join("^" if (h1 ^ h2) >> (31 - i) & 1 else " " for i in range(32))
+    print(f"  различаются биты:            {marks}")
+    print(f"  расстояние Хэмминга: {dist} из 32 ({dist / 32:.0%}); "
+          "ожидание для идеальной функции — 16")
     mean, lo, hi = avalanche_stats(fn)
-    print(f"  Статистика по 1000 случайным парам: среднее {mean:.2f}, минимум {lo}, максимум {hi} из 32 "
-          f"(биномиальное распределение B(32, 1/2): σ ≈ 2.8)")
+    print(f"  Статистика по 1000 случайным парам: среднее {mean:.2f}, минимум {lo}, "
+          f"максимум {hi} из 32 (биномиальное распределение B(32, 1/2): σ ≈ 2.8)")
 
 
 def mode_collision(variant):
@@ -245,19 +253,30 @@ def mode_collision(variant):
     for m1, s1, m2, s2, h1, h2, same in structural_checks(lambda m, s: my_hash(m, s, variant)):
         left = f"hash({m1!r}{', соль ' + repr(s1) if s1 else ''})"
         right = f"hash({m2!r}{', соль ' + repr(s2) if s2 else ''})"
-        print(f"    {left:26} = {to_hex(h1)}   {right:26} = {to_hex(h2)}   {'СОВПАЛИ' if same else 'различны'}")
-    raw = input("  Seed генератора сообщений (Enter — три запуска с seed 2026, 1, 2): ").strip()
-    seeds = [int(raw)] if raw.lstrip("-").isdigit() else [2026, 1, 2]
+        verdict = "СОВПАЛИ" if same else "различны"
+        print(f"    {left:26} = {to_hex(h1)}   {right:26} = {to_hex(h2)}   {verdict}")
+    raw = input("  Seed генератора сообщений "
+                "(Enter — три запуска с seed 2026, 1, 2): ").strip()
+    seeds = [2026, 1, 2]
+    if raw:
+        try:
+            seeds = [int(raw)]
+        except ValueError:
+            print("  Нужно целое число; выполняются три запуска с seed 2026, 1, 2.")
     expected = math.sqrt(math.pi / 2 * 2 ** 32)
-    print(f"  Поиск коллизии методом дней рождения (различные сообщения из a-z0-9 длины 1..12);")
-    print(f"  ожидание для 32 бит: sqrt(π/2 · 2^32) ≈ {expected:.0f} сообщений, разброс ±50 % (σ ≈ 0.52·E)")
+    print("  Поиск коллизии методом дней рождения "
+          "(различные сообщения из a-z0-9 длины 1..12);")
+    print(f"  ожидание для 32 бит: sqrt(π/2 · 2^32) ≈ {expected:.0f} сообщений, "
+          "разброс ±50 % (σ ≈ 0.52·E)")
     counts = []
     for seed in seeds:
         m1, m2, h, n, seconds = find_collision(variant, seed)
         counts.append(n)
-        print(f"    seed {seed:5d}: {m1!r} и {m2!r} → {to_hex(h)}; различных сообщений {n}, время {seconds:.2f} с")
+        print(f"    seed {seed:5d}: {m1!r} и {m2!r} → {to_hex(h)}; "
+              f"различных сообщений {n}, время {seconds:.2f} с")
     if len(counts) > 1:
-        print(f"  Среднее по {len(counts)} запускам: {sum(counts) / len(counts):.0f} (теория {expected:.0f})")
+        mean = sum(counts) / len(counts)
+        print(f"  Среднее по {len(counts)} запускам: {mean:.0f} (теория {expected:.0f})")
 
 
 def mode_distribution(variant):
@@ -267,12 +286,15 @@ def mode_distribution(variant):
         print("    " + "   ".join(f"{to_hex(h)} {m:<12}" for h, m in items[row:row + 4]))
     expected = len(items) / len(counts)
     sigma = math.sqrt(expected * (1 - 1 / len(counts)))
-    print(f"  Распределение по 16 диапазонам (первая hex-цифра), ожидание {expected:.2f} на диапазон, σ ≈ {sigma:.2f}:")
+    print(f"  Распределение по 16 диапазонам (первая hex-цифра), "
+          f"ожидание {expected:.2f} на диапазон, σ ≈ {sigma:.2f}:")
     for i, c in enumerate(counts):
         print(f"    {i:x}xxxxxxx  {c:3d}  {'#' * c}")
-    print(f"  Минимум {min(counts)}, максимум {max(counts)}; максимум из 16 диапазонов при равномерном "
-          f"распределении обычно 10–12, скоплением считается более {3 * expected:.0f} (втрое выше ожидания).")
-    print("  Скоплений нет." if max(counts) <= 3 * expected else "  Внимание: есть скопление.")
+    cluster = math.floor(3 * expected) + 1    # наименьшее целое больше трёх ожиданий
+    print(f"  Минимум {min(counts)}, максимум {max(counts)}; максимум из 16 диапазонов "
+          f"при равномерном распределении обычно 10–12, скоплением считается {cluster} "
+          "и более (свыше трёх ожиданий).")
+    print("  Скоплений нет." if max(counts) < cluster else "  Внимание: есть скопление.")
 
 
 def mode_compare(variant):
@@ -282,8 +304,8 @@ def mode_compare(variant):
     schemes = (("наивная", lambda m, s="": naive_hash(s + SEPARATOR + m if s else m, variant)),
                ("итоговая", lambda m, s="": my_hash(m, s, variant)))
     for name, fn in schemes:
-        mean, lo, hi = avalanche_stats(lambda m: fn(m))
-        _, counts = distribution(lambda m: fn(m))
+        mean, lo, hi = avalanche_stats(fn)
+        _, counts = distribution(fn)
         pairs = structural_checks(fn)
         broken = sum(1 for row in pairs[:-1] if row[6])
         print(f"    {name:9}: лавина в среднем {mean:.1f} бит из 32 (мин {lo}, макс {hi}); "
@@ -317,7 +339,8 @@ def main():
             "  4 — равномерность распределения: 100 сообщений по 16 диапазонам\n"
             "  5 — сравнение с наивной схемой по варианту\n"
             "  0 — выход")
-    actions = {"1": mode_hash, "2": mode_avalanche, "3": mode_collision, "4": mode_distribution, "5": mode_compare}
+    actions = {"1": mode_hash, "2": mode_avalanche, "3": mode_collision,
+               "4": mode_distribution, "5": mode_compare}
     try:
         while True:
             print(menu)
