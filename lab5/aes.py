@@ -56,7 +56,8 @@ INV_SBOX = [0] * 256
 for _i, _s in enumerate(SBOX):
     INV_SBOX[_s] = _i
 RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
-MUL = {c: [gmul(x, c) for x in range(256)] for c in (2, 3, 9, 11, 13, 14)}   # таблицы для MixColumns
+# таблицы умножения для MixColumns и InvMixColumns
+MUL = {c: [gmul(x, c) for x in range(256)] for c in (2, 3, 9, 11, 13, 14)}
 
 
 # --- Раунд ----------------------------------------------------------------------------
@@ -96,7 +97,8 @@ def _inv_shift_rows(state):
 
 
 def _mix_columns(state, inverse=False):
-    """Умножение каждого столбца на фиксированный многочлен над GF(2^8) (FIPS-197, 5.1.3 / 5.3.3)."""
+    """Умножение каждого столбца на фиксированный многочлен над GF(2^8)
+    (FIPS-197, 5.1.3 / 5.3.3)."""
     m2, m3, m9, m11, m13, m14 = (MUL[c] for c in (2, 3, 9, 11, 13, 14))
     out = []
     for c in range(4):
@@ -128,7 +130,8 @@ def decrypt_block(round_keys, block):
     """Расшифрование одного блока обратным шифром (FIPS-197, 5.3)."""
     state = _add_round_key(list(block), round_keys[-1])
     for key in reversed(round_keys[1:-1]):
-        state = _mix_columns(_add_round_key(_sub_bytes(_inv_shift_rows(state), INV_SBOX), key), inverse=True)
+        state = _add_round_key(_sub_bytes(_inv_shift_rows(state), INV_SBOX), key)
+        state = _mix_columns(state, inverse=True)
     state = _add_round_key(_sub_bytes(_inv_shift_rows(state), INV_SBOX), round_keys[0])
     return bytes(state)
 
@@ -178,10 +181,13 @@ def decrypt_cbc(key, iv, data):
 
 
 # --- Самопроверка -----------------------------------------------------------------------
+PLAIN = "00112233445566778899aabbccddeeff"
 FIPS_VECTORS = [   # FIPS-197, приложение C: (ключ, открытый текст, шифртекст)
-    ("000102030405060708090a0b0c0d0e0f", "00112233445566778899aabbccddeeff", "69c4e0d86a7b0430d8cdb78070b4c55a"),
-    ("000102030405060708090a0b0c0d0e0f1011121314151617", "00112233445566778899aabbccddeeff", "dda97ca4864cdfe06eaf70a0ec0d7191"),
-    ("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "00112233445566778899aabbccddeeff", "8ea2b7ca516745bfeafc49904b496089"),
+    ("000102030405060708090a0b0c0d0e0f", PLAIN, "69c4e0d86a7b0430d8cdb78070b4c55a"),
+    ("000102030405060708090a0b0c0d0e0f1011121314151617", PLAIN,
+     "dda97ca4864cdfe06eaf70a0ec0d7191"),
+    ("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", PLAIN,
+     "8ea2b7ca516745bfeafc49904b496089"),
 ]
 
 
@@ -196,14 +202,17 @@ def self_test(verbose=True):
         good = got == cipher and back == plain
         ok &= good
         if verbose:
-            print(f"AES-{len(key) * 4}: E(текст) = {got}  {'совпал' if good else 'НЕ СОВПАЛ'} с FIPS-197; D(шифртекст) = {back}")
+            verdict = "совпал" if good else "НЕ СОВПАЛ"
+            print(f"AES-{len(key) * 4}: E(текст) = {got}  {verdict} с FIPS-197; "
+                  f"D(шифртекст) = {back}")
     for length in (0, 1, 15, 16, 17, 100, 1000):
         key, iv, data = os.urandom(32), os.urandom(16), os.urandom(length)
         ct = encrypt_cbc(key, iv, data)
         good = decrypt_cbc(key, iv, ct) == data and len(ct) == (length // BLOCK + 1) * BLOCK
         ok &= good
         if verbose:
-            print(f"CBC, {length:4d} байт: шифртекст {len(ct):4d} байт, расшифрование {'верно' if good else 'НЕВЕРНО'}")
+            verdict = "верно" if good else "НЕВЕРНО"
+            print(f"CBC, {length:4d} байт: шифртекст {len(ct):4d} байт, расшифрование {verdict}")
     if verbose:
         print("Итог:", "все проверки пройдены" if ok else "ЕСТЬ ОШИБКИ")
     return ok
