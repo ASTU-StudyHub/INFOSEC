@@ -2,7 +2,7 @@
 """Лабораторная работа №4. Реализация электронной цифровой подписи.
 
 Подпись строится из программ предыдущих работ: RSA (lab2/rsa.py) и собственной
-хэш-функции (lab3/myhash.py). Схема из методических указаний:
+хэш-функции на основе sin(m) (lab3/myhash.py, вариант 1). Схема из методических указаний:
     формирование: h = H(M);  S = h^d mod n;  передаётся пара (M, S)
     проверка:     h' = H(M);  h'' = S^e mod n;  подпись верна, если h' = h''
 Закрытый ключ {d, n} есть только у автора (аутентичность, неотказуемость),
@@ -16,7 +16,7 @@ S^e mod n = h mod n ≠ h и подпись не сходится даже на 
 Режимы: ключи (случайно / вручную), ввод сообщения, подпись, проверка пары (M, S),
 модификация сообщения с последующей проверкой, автотест, демонстрация условия h < n.
 
-Только стандартная библиотека. Запуск: python3 signature.py [sin|cos|xor]
+Только стандартная библиотека. Запуск: python3 signature.py
 (модули подключаются из соседних папок lab2 и lab3).
 """
 
@@ -28,7 +28,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE, "..", "lab2"))     # rsa.py — лабораторная №2
 sys.path.insert(0, os.path.join(BASE, "..", "lab3"))     # myhash.py — лабораторная №3
 # rsa: modpow, gen_prime, prime_error, key_errors, make_keys, read_int, read_text, EXAMPLE
-# myhash: my_hash, to_hex, hamming, VARIANTS
+# myhash: my_hash, to_hex, hamming
 import rsa      # noqa: E402
 import myhash   # noqa: E402
 
@@ -40,18 +40,18 @@ ASCII_PRINTABLE = [chr(c) for c in range(32, 127)]
 
 
 # --- Подпись и проверка --------------------------------------------------------------
-def sign(message, d, n, variant):
+def sign(message, d, n):
     """Формирование ЭЦП: h = H(M), S = h^d mod n. Возвращает (h, S)."""
-    h = myhash.my_hash(message, variant=variant)
+    h = myhash.my_hash(message)
     if h >= n:
         raise ValueError(f"хэш h = {h} ≥ n = {n}: подпись не проверится, "
                          "нужен модуль n = p·q > 2^32")
     return h, rsa.modpow(h, d, n)
 
 
-def verify(message, signature, e, n, variant):
+def verify(message, signature, e, n):
     """Проверка ЭЦП: h' = H(M), h'' = S^e mod n. Возвращает (h', h'', совпали ли)."""
-    h1 = myhash.my_hash(message, variant=variant)
+    h1 = myhash.my_hash(message)
     h2 = rsa.modpow(signature, e, n)
     return h1, h2, h1 == h2
 
@@ -115,7 +115,7 @@ def make_keys(p=None, q=None, d=None):
     return p, q, phi, (e, n), (d, n)
 
 
-def self_test(variant, count=1000, seed=2026, verbose=True):
+def self_test(count=1000, seed=2026, verbose=True):
     """count случайных сообщений: нетронутые должны проходить проверку, изменённые — нет."""
     rng = random.Random(seed)
     saved = random.getstate()
@@ -125,11 +125,11 @@ def self_test(variant, count=1000, seed=2026, verbose=True):
     ok_intact = ok_detected = 0
     for _ in range(count):
         message = "".join(rng.choice(ASCII_PRINTABLE) for _ in range(rng.randint(0, 50)))
-        h, s = sign(message, d, n, variant)
-        ok_intact += verify(message, s, e, n, variant)[2]
+        h, s = sign(message, d, n)
+        ok_intact += verify(message, s, e, n)[2]
         kind = rng.choice(["replace", "insert", "delete", "swap"])
         changed, _ = modify(message, kind, rng=rng)
-        ok_detected += not verify(changed, s, e, n, variant)[2]
+        ok_detected += not verify(changed, s, e, n)[2]
     if verbose:
         print(f"  Ключи: p = {p}, q = {q}, n = {n} (> 2^32: {'да' if n > N_MIN else 'нет'}), "
               f"e = {e}, d = {d}")
@@ -245,18 +245,18 @@ def need(st, keys=True, message=False, signature=False):
     return True
 
 
-def mode_sign(st, variant):
+def mode_sign(st):
     if not need(st, message=True):
         return
     _, _, _, (e, n), (d, _) = st.keys
-    h, s = sign(st.message, d, n, variant)
+    h, s = sign(st.message, d, n)
     st.signature, st.modified = s, None
     print(f"  h = H(M) = {myhash.to_hex(h)} = {h} (h < n: {'да' if h < n else 'нет'})")
     print(f"  S = h^d mod n = {s}")
     print(f"  Передаётся пара (M, S): ({st.message!r}, {s})")
 
 
-def mode_verify(st, variant):
+def mode_verify(st):
     if not need(st):
         return
     _, _, _, (e, n), _ = st.keys
@@ -276,7 +276,7 @@ def mode_verify(st, variant):
                                              f"S должно лежать в [0, n−1] = [0, {n - 1}]"))
     else:
         message, s = st.message, st.signature
-    h1, h2, ok = verify(message, s, e, n, variant)
+    h1, h2, ok = verify(message, s, e, n)
     print(f"  h'  = H(M)        = {myhash.to_hex(h1)}")
     if h2 >= 2 ** 32:
         print(f"  h'' = S^e mod n   = {h2} — не помещается в 32 бита: "
@@ -293,7 +293,7 @@ def mode_verify(st, variant):
         print("  ПОДПИСЬ НЕВЕРНА: хэш-суммы не совпадают — подпись чужая или искажена.")
 
 
-def mode_modify(st, variant):
+def mode_modify(st):
     if not need(st, message=True, signature=True):
         return
     kinds = {"1": "replace", "2": "insert", "3": "delete", "4": "swap"}
@@ -341,7 +341,7 @@ def mode_modify(st, variant):
     print(f"  Было:  {st.message!r}")
     print(f"  Стало: {st.modified!r}  — {description}; подпись S = {st.signature} не менялась")
     _, _, _, (e, n), _ = st.keys
-    h1, h2, ok = verify(st.modified, st.signature, e, n, variant)
+    h1, h2, ok = verify(st.modified, st.signature, e, n)
     if ok:
         verdict = "хэш-суммы совпали — коллизия хэш-функции"
     else:
@@ -350,13 +350,13 @@ def mode_modify(st, variant):
           f"h'' = {myhash.to_hex(h2)} → {verdict}")
 
 
-def mode_demo_small_n(variant):
+def mode_demo_small_n():
     """Почему нужен n > 2^32: ключи примера из методических указаний к ЛР2 (n = 33)
     не проверяют даже нетронутое сообщение."""
     p, q, d = EXAMPLE_KEYS
     (e, n), (d, _), _ = rsa.make_keys(p, q, d, check=False)
     message = "Hello"
-    h = myhash.my_hash(message, variant=variant)
+    h = myhash.my_hash(message)
     s = rsa.modpow(h, d, n)
     h2 = rsa.modpow(s, e, n)
     result = "сошлась" if h2 == h else "НЕ сошлась"
@@ -370,13 +370,8 @@ def mode_demo_small_n(variant):
 
 
 def main():
-    variant = sys.argv[1].lower() if len(sys.argv) > 1 else "sin"
-    variant = {"1": "sin", "2": "cos", "3": "xor"}.get(variant, variant)
-    if variant not in myhash.VARIANTS:
-        print(f"Неизвестный вариант хэш-функции «{sys.argv[1]}»: допустимы sin, cos, xor.")
-        return
     st = State()
-    menu = (f"\nЛабораторная работа №4. ЭЦП на RSA (ЛР2) и хэш-функции {variant}(m) (ЛР3)\n"
+    menu = ("\nЛабораторная работа №4. ЭЦП на RSA (ЛР2) и хэш-функции sin(m) (ЛР3)\n"
             "  1 — ключи RSA (случайные или вручную)\n"
             "  2 — сообщение (с клавиатуры или случайное)\n"
             "  3 — подписать сообщение\n"
@@ -386,9 +381,8 @@ def main():
             "  7 — демонстрация условия h < n (ключи n = 33 из примера ЛР2)\n"
             "  0 — выход")
     actions = {"1": lambda: mode_keys(st), "2": lambda: mode_message(st),
-               "3": lambda: mode_sign(st, variant), "4": lambda: mode_verify(st, variant),
-               "5": lambda: mode_modify(st, variant), "6": lambda: self_test(variant),
-               "7": lambda: mode_demo_small_n(variant)}
+               "3": lambda: mode_sign(st), "4": lambda: mode_verify(st),
+               "5": lambda: mode_modify(st), "6": self_test, "7": mode_demo_small_n}
     try:
         while True:
             print(menu)

@@ -23,7 +23,7 @@
 ```bash
 python3 lab1/dh.py
 python3 lab2/rsa.py
-python3 lab3/myhash.py sin      # вариант: sin, cos или xor
+python3 lab3/myhash.py
 python3 lab4/signature.py       # использует соседние lab2/rsa.py и lab3/myhash.py
 python3 lab5/manager.py         # графическое окно (tkinter); python3 lab5/storage.py — автотест без GUI
 ```
