@@ -8,8 +8,9 @@ B = α^y mod p. Обе стороны вычисляют общий ключ K:
     K_A = B^x mod p,   K_B = A^y mod p,   K_A == K_B == α^(xy) mod p.
 
 Режимы: случайная генерация параметров, ручной ввод с клавиатуры,
-самопроверка по таблице 1.1 методички, перебор ключа третьим лицом
-по журналу канала (почему учебное p < 10000 не даёт стойкости).
+самопроверка по таблице 1.1 методических указаний, перебор ключа
+третьим лицом по журналу канала (почему учебное p < 10000 не даёт
+стойкости).
 
 Только стандартная библиотека. Запуск: python3 dh.py
 """
@@ -23,7 +24,7 @@ import time
 P_MIN = 5          # при p = 2, 3 нет ни одного α в диапазоне [2, p-2]
 P_MAX = 9999
 
-# Таблица 1.1 методички — тест самопроверки: (p, α, x, y, K)
+# Таблица 1.1 методических указаний — тест самопроверки: (p, α, x, y, K)
 TABLE_1_1 = [
     (29, 2, 60, 82, 23),
     (53, 2, 20, 77, 42),
@@ -135,9 +136,8 @@ class Participant:
     """Общая часть Алисы и Боба: секретный показатель и две операции протокола."""
 
     def __init__(self, name):
-        self.name = name
+        self.name = name                # имя в журнале канала
         self.secret = None              # x у Алисы, y у Боба; канал не покидает
-        self.key = None                 # общий ключ K после завершения протокола
 
     def choose_secret(self, p, value=None):
         self.secret = value if value is not None else random.randint(1, p - 2)
@@ -149,15 +149,14 @@ class Participant:
 
     def compute_key(self, other_public, p):
         """K = (α^other)^secret mod p."""
-        self.key = modpow(other_public, self.secret, p)
-        return self.key
+        return modpow(other_public, self.secret, p)
 
 
 class Alice(Participant):
     """Инициатор: генерирует p, α (если не заданы) и начинает обмен."""
 
     def __init__(self):
-        super().__init__("Alice")
+        super().__init__("Алиса")
 
     def setup(self, p=None, alpha=None):
         p = p if p is not None else gen_prime()
@@ -167,7 +166,7 @@ class Alice(Participant):
 
 class Bob(Participant):
     def __init__(self):
-        super().__init__("Bob")
+        super().__init__("Боб")
 
 
 def run_protocol(p=None, alpha=None, x=None, y=None, verbose=True):
@@ -176,14 +175,16 @@ def run_protocol(p=None, alpha=None, x=None, y=None, verbose=True):
     channel = Channel(verbose)
 
     p, alpha = alice.setup(p, alpha)
-    channel.send("Alice", "Bob", "p", p)
-    channel.send("Alice", "Bob", "alpha", alpha)
+    channel.send(alice.name, bob.name, "p", p)
+    channel.send(alice.name, bob.name, "alpha", alpha)
 
     x = alice.choose_secret(p, x)
-    A = channel.send("Alice", "Bob", "A = alpha^x mod p", alice.public_value(alpha, p))
+    A = channel.send(alice.name, bob.name, "A = alpha^x mod p",
+                     alice.public_value(alpha, p))
 
     y = bob.choose_secret(p, y)
-    B = channel.send("Bob", "Alice", "B = alpha^y mod p", bob.public_value(alpha, p))
+    B = channel.send(bob.name, alice.name, "B = alpha^y mod p",
+                     bob.public_value(alpha, p))
 
     k_a = alice.compute_key(B, p)      # Алиса: K = B^x mod p
     k_b = bob.compute_key(A, p)        # Боб:   K = A^y mod p
@@ -199,8 +200,8 @@ def print_session(p, alpha, x, y, A, B, k_a, k_b):
     else:
         print("  ОШИБКА: ключи различны")
     if A == 1 or B == 1:
-        print("  Внимание: открытое значение равно 1 — секретный показатель кратен p-1, "
-              "ключ вырожден (K = 1).")
+        print("  Внимание: открытое значение равно 1 — секретный показатель "
+              "кратен p-1, ключ вырожден (K = 1).")
 
 
 # --- Самопроверка по таблице 1.1 ----------------------------------------------
@@ -208,13 +209,18 @@ def self_test(verbose=True):
     """Прогон всех 10 строк таблицы 1.1. Возвращает число пройденных строк."""
     passed = 0
     if verbose:
-        print(f"  {'№':>2} {'p':>4} {'α':>2} {'x':>3} {'y':>3} {'A':>4} {'B':>4} {'K ожид.':>8} {'K получ.':>9}  результат")
+        head = (f"  {'№':>2} {'p':>4} {'α':>2} {'x':>3} {'y':>3} {'A':>4} {'B':>4}"
+                f" {'K ожид.':>8} {'K получ.':>9}  результат")
+        print(head)
     for i, (p, alpha, x, y, k_expected) in enumerate(TABLE_1_1, 1):
         _, _, _, _, A, B, k_a, k_b, _ = run_protocol(p, alpha, x, y, verbose=False)
         ok = k_a == k_b == k_expected
         passed += ok
         if verbose:
-            print(f"  {i:>2} {p:>4} {alpha:>2} {x:>3} {y:>3} {A:>4} {B:>4} {k_expected:>8} {k_a:>9}  {'PASS' if ok else 'FAIL'}")
+            mark = "PASS" if ok else "FAIL"
+            row = (f"  {i:>2} {p:>4} {alpha:>2} {x:>3} {y:>3} {A:>4} {B:>4}"
+                   f" {k_expected:>8} {k_a:>9}  {mark}")
+            print(row)
     if verbose:
         print(f"  Итог: {passed}/{len(TABLE_1_1)} строк совпали с таблицей 1.1")
     return passed
@@ -244,7 +250,8 @@ def attack_demo(channel):
     elapsed_ms = (time.perf_counter() - t0) * 1000
     k_found = modpow(B, x_found, p) if x_found is not None else None
     print(f"  Перехвачено из канала: p = {p}, alpha = {alpha}, A = {A}, B = {B}")
-    print(f"  Перебор: x = {x_found} (по модулю p-1) найден за {x_found} итераций, {elapsed_ms:.3f} мс")
+    print(f"  Перебор: x = {x_found} (по модулю p-1), число итераций: {x_found}, "
+          f"время {elapsed_ms:.3f} мс")
     print(f"  Восстановленный ключ K = B^x mod p = {k_found}")
     return x_found, elapsed_ms, k_found
 
@@ -273,12 +280,14 @@ def manual_mode():
                  f"p должно быть простым числом из [{P_MIN}, {P_MAX}].")
     alpha = read_int("  alpha (порождающий элемент, 2 <= alpha <= p-2): ",
                      lambda v: is_generator(v, p),
-                     "alpha должно лежать в [2, p-2] и быть порождающим элементом Z_p* "
-                     "(порядок alpha равен p-1).")
+                     "alpha должно лежать в [2, p-2] и быть порождающим "
+                     "элементом Z_p* (порядок alpha равен p-1).")
     # Верхняя граница для x, y не проверяется: α^x ≡ α^(x mod (p-1)) (mod p),
     # в таблице 1.1 шесть строк из десяти имеют x или y >= p-1.
-    x = read_int("  x (секрет Алисы, x >= 1): ", lambda v: v >= 1, "x должно быть >= 1.")
-    y = read_int("  y (секрет Боба, y >= 1): ", lambda v: v >= 1, "y должно быть >= 1.")
+    x = read_int("  x (секрет Алисы, x >= 1): ", lambda v: v >= 1,
+                 "x должно быть >= 1.")
+    y = read_int("  y (секрет Боба, y >= 1): ", lambda v: v >= 1,
+                 "y должно быть >= 1.")
     print("Обмен по открытому каналу:")
     p, alpha, x, y, A, B, k_a, k_b, channel = run_protocol(p, alpha, x, y)
     print_session(p, alpha, x, y, A, B, k_a, k_b)
@@ -291,7 +300,8 @@ def random_mode():
     print("Обмен по открытому каналу:")
     p, alpha, x, y, A, B, k_a, k_b, channel = run_protocol()
     yes_no = lambda flag: "да" if flag else "нет"
-    print(f"  свойства параметров: p простое — {yes_no(is_prime(p))}, p < 10000 — {yes_no(p < 10000)}, "
+    print(f"  свойства параметров: p простое — {yes_no(is_prime(p))}, "
+          f"p < 10000 — {yes_no(p < 10000)}, "
           f"alpha порождающий — {yes_no(is_generator(alpha, p))}")
     print_session(p, alpha, x, y, A, B, k_a, k_b)
     return channel
