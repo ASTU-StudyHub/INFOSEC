@@ -1,0 +1,166 @@
+# Сборка исполняемых файлов: один файл на систему для всех лабораторных работ курса.
+# Точка входа — launcher.py (меню работ). Запуск: push тега «v*» (сборка и публикация
+# в Releases) или вручную на вкладке Actions (только сборка, файлы — в артефактах запуска).
+name: Сборка исполняемых файлов
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13.16"       # одна версия Python на всех системах
+  PYINSTALLER_VERSION: "6.22.3"
+
+jobs:
+  build:
+    name: Сборка (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+            file: INFOSEC-windows.exe
+          - os: ubuntu-22.04      # glibc 2.35: файл запустится и на более новых дистрибутивах
+            target: linux
+            file: INFOSEC-linux
+          - os: macos-15          # сборка universal2: один файл для Apple Silicon и Intel
+            target: macos
+            file: INFOSEC-macos
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Python ${{ env.PYTHON_VERSION }} (Windows, Linux)
+        if: runner.os != 'macOS'
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Python в переменной PY (Windows, Linux)
+        if: runner.os != 'macOS'
+        run: echo "PY=python" >> "$GITHUB_ENV"
+
+      # universal2 (arm64 + x86_64) вместе с Tcl/Tk — официальный установщик с python.org.
+      # Ставим его явно, с проверкой подписи, чтобы версия и происхождение Python были видны
+      # в workflow (setup-python на macOS ставит тот же pkg).
+      - name: Python ${{ env.PYTHON_VERSION }} universal2 с python.org (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pkg="python-$PYTHON_VERSION-macos11.pkg"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$pkg" \
+            "https://www.python.org/ftp/python/$PYTHON_VERSION/$pkg"
+          pkgutil --check-signature "$RUNNER_TEMP/$pkg"
+          sudo installer -pkg "$RUNNER_TEMP/$pkg" -target /
+          framework="/Library/Frameworks/Python.framework/Versions/${PYTHON_VERSION%.*}"
+          "$framework/bin/python3" -m venv "$RUNNER_TEMP/venv"
+          echo "PY=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: Tcl/Tk (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ! "$PY" -c "import tkinter; tkinter.Tcl()"; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends tk8.6
+          fi
+
+      - name: Проверка Python и Tcl/Tk
+        run: |
+          "$PY" -c "import platform, sys, tkinter; print(sys.version, platform.machine())"
+          "$PY" -c "import tkinter; print('Tcl/Tk', tkinter.Tcl().eval('info patchlevel'))"
+
+      - name: PyInstaller ${{ env.PYINSTALLER_VERSION }}
+        run: |
+          "$PY" -m pip install --disable-pip-version-check "pyinstaller==$PYINSTALLER_VERSION"
+
+      # --bootloader-ignore-signals: Ctrl+C из терминала и так получает вся группа процессов;
+      # без флага загрузчик onefile переслал бы его ещё раз, и второй SIGINT завершил бы
+      # работу там, где первый лишь прерывает действие (факторизацию в ЛР2).
+      - name: Сборка ${{ matrix.file }}
+        run: |
+          args=(--onefile --clean --noconfirm --bootloader-ignore-signals
+                --name "INFOSEC-${{ matrix.target }}")
+          for n in 1 2 3 4 5; do args+=(--paths "lab$n"); done
+          if [ "$RUNNER_OS" = macOS ]; then args+=(--target-arch universal2); fi
+          "$PY" -m PyInstaller "${args[@]}" launcher.py
+          ls -l dist
+
+      # Окна не открываются: --selftest проверяет работу 5 без Tk-окна.
+      - name: Проверка собранного файла
+        run: |
+          exe="dist/${{ matrix.file }}"
+          "$exe" --help
+          "$exe" --selftest
+          # меню → ЛР3 → хэш «abc» без соли → выход: ввод доходит до работы в её процессе
+          printf '3\n1\nabc\nn\n0\n0\n' | "$exe" | tee "$RUNNER_TEMP/menu.txt"
+          grep -q "7139aeec" "$RUNNER_TEMP/menu.txt"
+
+      - name: Архитектуры файла macOS
+        if: runner.os == 'macOS'
+        run: |
+          exe="dist/${{ matrix.file }}"
+          archs="$(lipo -archs "$exe")"
+          echo "Архитектуры: $archs"
+          for need in x86_64 arm64; do
+            if [[ " $archs " != *" $need "* ]]; then
+              echo "::error::В файле нет архитектуры $need: нужен universal2"
+              exit 1
+            fi
+          done
+          if arch -x86_64 /usr/bin/true 2> /dev/null; then
+            arch -x86_64 "$exe" --selftest
+          else
+            echo "Rosetta 2 на раннере нет: часть x86_64 только собрана, не запущена"
+          fi
+
+      - name: Артефакт ${{ matrix.file }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: INFOSEC-${{ matrix.target }}
+          path: dist/${{ matrix.file }}
+          if-no-files-found: error
+
+  release:
+    name: Публикация в Releases
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Исполняемые файлы из сборки
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Релиз ${{ github.ref_name }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          test "$(ls dist | wc -l)" -eq 3
+          cat > notes.md << 'EOF'
+          Исполняемые файлы для быстрого запуска лабораторных работ 1–5 курса «Защита информации» — по одному на систему:
+
+          - `INFOSEC-windows.exe` — Windows 10 и 11 (x64);
+          - `INFOSEC-macos` — macOS (Apple Silicon и Intel);
+          - `INFOSEC-linux` — Linux x86_64 (glibc 2.35 и новее: Ubuntu 22.04, Debian 12 и т. п.).
+
+          Python устанавливать не нужно. Запуск без аргументов открывает меню работ; `--help` — справка. Первый запуск (macOS и Linux: `chmod +x`, предупреждения Gatekeeper и SmartScreen) описан в README, раздел «Готовые исполняемые файлы».
+          EOF
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "INFOSEC $TAG" --notes-file notes.md --verify-tag
+          fi
